@@ -1,0 +1,36 @@
+[project]
+name = "wise-voice-agent"
+version = "0.1.0"
+description = "Phone support agent for Wise's \"Where is my money?\" FAQs, built on Pipecat"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pipecat-ai[deepgram,groq,runner,silero,websocket]==1.15.0",
+]
+
+[dependency-groups]
+dev = [
+    "pipecat-ai[evals,webrtc]==1.15.0",
+    "pyright>=1.1.414",
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+# Third-party deprecation noise; our own warnings still show.
+filterwarnings = [
+    "ignore::DeprecationWarning:pipecat.*",
+    "ignore::DeprecationWarning:websockets.*",
+    "ignore:`AudioContextTTSService` is deprecated:DeprecationWarning",
+]
+
+[tool.pyright]
+include = ["bot.py", "tests", "evals"]
