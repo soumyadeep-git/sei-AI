@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: wise-voice-agent
+    runtime: docker
+    plan: free
+    healthCheckPath: /status
+    envVars:
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
