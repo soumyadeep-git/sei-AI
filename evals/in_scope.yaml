@@ -1,0 +1,92 @@
+# Questions the knowledge base answers: the bot must answer from it and must
+# not deflect. One scenario per Wise article, plus a multi-turn call.
+#
+#   uv run bot.py                                  # terminal 1
+#   PYTHONPATH=. uv run pipecat eval run evals/in_scope.yaml -v # terminal 2
+
+name: in_scope
+
+judge:
+  eval:
+    factory: evals.judge.groq
+    allow_continue: false
+
+scenarios:
+  - name: check_status
+    turns:
+      - user: "How do I check the status of my transfer?"
+        expect:
+          - event: response
+            eval: "says to use the tracker in the Wise account (log in, go to Home, select the transfer)"
+          - event: function_call
+            absent: true
+            within_ms: 8000
+
+  - name: due_today
+    turns:
+      - user: "The app says my money is due to arrive today but it's not there yet."
+        expect:
+          - event: response
+            eval: "explains it should have arrived or that some banks need a few hours to process it"
+          - event: function_call
+            absent: true
+            within_ms: 8000
+
+  - name: complete_not_arrived
+    turns:
+      - user: "My transfer says complete but my sister still hasn't received the money."
+        expect:
+          - event: response
+            eval: "explains complete means Wise sent it to the recipient's bank, which may still be processing it, or that it may show as from Wise rather than the sender"
+          - event: function_call
+            absent: true
+            within_ms: 8000
+
+  - name: longer_than_estimate
+    turns:
+      - user: "Why is my transfer taking longer than the estimate?"
+        expect:
+          - event: response
+            eval: "gives at least one reason from: security checks, payment method speed, weekends or public holidays, mistakes in the recipient's details"
+          - event: function_call
+            absent: true
+            within_ms: 8000
+
+  - name: swift_timing
+    turns:
+      - user: "How long does a Swift payment take to reach Wise?"
+        expect:
+          - event: response
+            eval: "says 1 to 6 working days"
+          - event: function_call
+            absent: true
+            within_ms: 8000
+
+  - name: banking_partner_reference
+    turns:
+      - user: "What's a banking partner reference number?"
+        expect:
+          - event: response
+            eval: "explains it's a number to give the recipient so their bank can locate the payment"
+          - event: function_call
+            absent: true
+            within_ms: 8000
+
+  - name: proof_of_payment_then_goodbye
+    turns:
+      - user: "Wise emailed me asking for a proof of payment. What is that?"
+        expect:
+          - event: response
+            eval: "explains it's a document, such as a bank statement or screenshot, showing the money was sent from the caller's bank account"
+      - user: "What does it need to show?"
+        expect:
+          - event: response
+            eval: "lists at least two of: the caller's name and account number, the bank's name or logo, Wise's details, the date, the amount, the currency, the reference"
+          - event: function_call
+            absent: true
+            within_ms: 8000
+      - user: "Great, that's all I needed. Thanks!"
+        expect:
+          - event: function_call
+            calls:
+              - name: end_call
