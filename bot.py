@@ -9,11 +9,15 @@ is deflected to a human (for this exercise: a fixed handoff line, then hang up).
     uv run bot.py -t twilio -x <public-hostname>    # production: Twilio webhook + media stream
 """
 
+import base64
+import hashlib
+import hmac
 import os
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+from fastapi import WebSocket
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.evals.transport import EvalTransportParams
@@ -30,7 +34,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.runner.types import RunnerArguments
+from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.deepgram.tts import DeepgramTTSService
@@ -83,25 +87,23 @@ point first and offer more detail rather than reading everything out.
 </knowledge_base>"""
 
 
-def latest_user_text(messages: list) -> str | None:
-    """The caller's most recent message, if it is plain text."""
-    for message in reversed(messages):
-        if isinstance(message, dict) and message.get("role") == "user":
-            content = message.get("content")
-            return content if isinstance(content, str) else None
-    return None
+def signed_by_twilio(websocket: WebSocket, host: str, auth_token: str) -> bool:
+    """Whether the media stream handshake carries Twilio's signature of the stream URL."""
+    signature = websocket.headers.get("x-twilio-signature", "")
+    for url in (f"wss://{host}/ws", f"wss://{host}/ws/"):
+        digest = hmac.new(auth_token.encode(), url.encode(), hashlib.sha1).digest()
+        if hmac.compare_digest(base64.b64encode(digest).decode(), signature):
+            return True
+    return False
 
 
-def next_silence(count: int, user_text: str | None, since: str | None) -> tuple[int, str | None]:
-    """Silence strikes since the caller last said something.
+def silence_strikes(strikes: int, messages: list, heard: int) -> tuple[int, int]:
+    """Count consecutive silences, resetting whenever the caller has said something new.
 
-    Two strikes end the call. A new message resets the count: the browser
-    text box appends that message without starting a user turn, so the
-    transcript is the signal, not the turn event.
+    Returns the new strike count and the number of caller messages seen so far.
     """
-    if user_text != since:
-        count = 0
-    return count + 1, user_text
+    said = sum(isinstance(m, dict) and m.get("role") == "user" for m in messages)
+    return (1 if said != heard else strikes + 1), said
 
 
 def closing_frames(text: str) -> list[Frame]:
@@ -117,7 +119,6 @@ def closing_frames(text: str) -> list[Frame]:
 
 
 async def _close_call(params: FunctionCallParams, text: str) -> None:
-    # The handler speaks a fixed line, so the LLM must not generate a reply too.
     await params.result_callback(None, properties=FunctionCallResultProperties(run_llm=False))
     for frame in closing_frames(text):
         await params.llm.push_frame(frame)
@@ -143,6 +144,19 @@ async def end_call(params: FunctionCallParams) -> None:
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Entry point the Pipecat runner calls once per call/session."""
+    cli = runner_args.cli_args
+    if (
+        cli
+        and cli.transport == "twilio"
+        and isinstance(runner_args, WebSocketRunnerArguments)
+        and not signed_by_twilio(
+            runner_args.websocket, cli.proxy, os.getenv("TWILIO_AUTH_TOKEN", "")
+        )
+    ):
+        logger.warning("Rejected a media stream without a valid Twilio signature")
+        await runner_args.websocket.close(code=4003)
+        return
+
     transport = await create_transport(
         runner_args,
         {
@@ -207,21 +221,14 @@ async def bot(runner_args: RunnerArguments) -> None:
     async def on_client_disconnected(transport, client):
         await runner.cancel()
 
-    # A silent line gets one nudge; a second silence ends the call so an open
-    # line doesn't hold the session (and the free-tier quotas) indefinitely.
-    silences = 0
-    since = None
-
-    @user_aggregator.event_handler("on_user_turn_started")
-    async def on_user_turn_started(aggregator, strategy):
-        nonlocal silences
-        silences = 0
+    # One nudge, then hang up, so an open line can't hold the session and quotas.
+    strikes = heard = 0
 
     @user_aggregator.event_handler("on_user_turn_idle")
     async def on_user_turn_idle(aggregator):
-        nonlocal silences, since
-        silences, since = next_silence(silences, latest_user_text(context.messages), since)
-        if silences == 1:
+        nonlocal strikes, heard
+        strikes, heard = silence_strikes(strikes, context.messages, heard)
+        if strikes == 1:
             await worker.queue_frames([TTSSpeakFrame(STILL_THERE)])
         else:
             logger.info("Caller silent, ending call")

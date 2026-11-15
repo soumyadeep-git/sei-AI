@@ -1,9 +1,12 @@
-"""How calls end: a fixed closing line, spoken in full, then hang-up.
+"""Deterministic call handling: who may connect, silence, and how calls end.
 
 Whether the LLM picks the right tool is covered by the evals in evals/.
 """
 
 import asyncio
+import base64
+import hashlib
+import hmac
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -28,14 +31,36 @@ class FrameRecorder(FrameProcessor):
 
 
 def test_a_new_caller_message_resets_the_silence_count():
-    count, since = bot.next_silence(1, None, None)
-    assert (count, since) == (2, None)
+    question = {"role": "user", "content": "Where is my transfer?"}
+    answer = {"role": "assistant", "content": "You can check it in the app."}
 
-    count, since = bot.next_silence(count, "How do I check the status of my transfer?", since)
-    assert (count, since) == (1, "How do I check the status of my transfer?")
+    strikes, heard = bot.silence_strikes(0, [], 0)
+    assert strikes == 1
+    strikes, heard = bot.silence_strikes(strikes, [question, answer], heard)
+    assert strikes == 1
+    strikes, heard = bot.silence_strikes(strikes, [question, answer], heard)
+    assert strikes == 2
+    strikes, heard = bot.silence_strikes(strikes, [question, answer, question], heard)
+    assert strikes == 1
 
-    count, since = bot.next_silence(count, since, since)
-    assert count == 2
+
+def _signature(token: str, url: str) -> str:
+    return base64.b64encode(hmac.new(token.encode(), url.encode(), hashlib.sha1).digest()).decode()
+
+
+@pytest.mark.parametrize(
+    ("header", "accepted"),
+    [
+        (_signature("secret", "wss://agent.example/ws"), True),
+        (_signature("secret", "wss://agent.example/ws/"), True),
+        (_signature("wrong", "wss://agent.example/ws"), False),
+        (None, False),
+    ],
+    ids=["signed", "signed_with_trailing_slash", "wrong_token", "unsigned"],
+)
+def test_only_twilio_signed_media_streams_are_accepted(header, accepted):
+    websocket = MagicMock(headers={"x-twilio-signature": header} if header else {})
+    assert bot.signed_by_twilio(websocket, "agent.example", "secret") is accepted
 
 
 def test_closing_line_is_spoken_before_the_pipeline_ends():

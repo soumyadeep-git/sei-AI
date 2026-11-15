@@ -25,7 +25,7 @@ Built on [Pipecat](https://github.com/pipecat-ai/pipecat). Every service runs on
 bot.py                          prompt, tools and pipeline (the whole agent)
 knowledge/where_is_my_money.md  the six Wise articles, the agent's only source of truth
 evals/                          behavioural scenarios + judge LLM
-tests/                          deterministic tests for how calls end
+tests/                          deterministic tests for call handling
 ```
 
 ## Design
@@ -55,6 +55,10 @@ to a `<Dial>` queue instead of hanging up.
 whether the caller is still there. A second silence ends the call, so an open
 line doesn't hold a session or burn quota.
 
+**Only Twilio can start a call.** The media stream websocket is the only
+thing that costs API quota, so the bot checks Twilio's `X-Twilio-Signature`
+on the handshake and closes any connection without a valid one.
+
 ## Run locally
 
 ```bash
@@ -68,7 +72,7 @@ uv run bot.py           # talk to it in the browser at http://localhost:7860
 ```bash
 uv run ruff check . && uv run ruff format --check .
 uv run pyright
-uv run pytest           # how calls end: line spoken in full, then hang-up; no LLM reply on top
+uv run pytest           # signature check, silence handling, how calls end
 ```
 
 Behaviour is tested with Pipecat's eval harness. Scripted text scenarios run
@@ -85,8 +89,7 @@ without deflecting, plus a multi-turn call that ends with `end_call`.
 off-topic requests and prompt injection, which must all go to
 `transfer_to_human`. Tool calls are checked deterministically. Answer content
 is checked by a judge LLM on Groq (`qwen/qwen3.8-27b`), a different model
-family from the bot so the bot doesn't grade its own answers. Llama 3.3 70B
-is no longer on Groq's model list.
+family from the bot so the bot doesn't grade its own answers.
 
 CI (`.github/workflows/ci.yml`) runs lint, type checks and tests on every push.
 The evals use live APIs, so they run on manual dispatch, using repository
@@ -112,7 +115,9 @@ telephony testing, `ngrok http 7860` gives you a hostname.
   about a minute to wake. Twilio stops waiting for the webhook after 15
   seconds, so the first call after a quiet spell can fail. Open `/status`
   before a demo, or keep the service awake with a free uptime pinger.
-- **Unauthenticated endpoints.** The webhook and websocket don't validate
-  Twilio's request signature. Anyone who finds the URL can open a session and
-  spend API quota. That has to be fixed before production.
+- **Caller transcripts in logs.** Pipecat's runner logs at debug level, which
+  includes what the caller says. Production would need log redaction or a
+  higher log level.
+- **Trial telephony.** A Twilio trial number only takes domestic calls, and
+  Twilio caps trial calls at 10 minutes.
 - English only, and a single knowledge source.
