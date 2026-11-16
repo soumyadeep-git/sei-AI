@@ -10,6 +10,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY bot.py ./
 COPY knowledge ./knowledge
+COPY web ./web
 
 RUN useradd --create-home app
 USER app

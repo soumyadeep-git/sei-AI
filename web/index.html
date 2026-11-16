@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wise “Where is my money?” voice agent · Sei take-home</title>
+    <meta
+      name="description"
+      content="A phone support agent that answers Wise's “Where is my money?” questions and hands everything else to a human."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap"
+    />
+    <link rel="stylesheet" href="/web/style.css" />
+    <script type="module" src="/web/app.js"></script>
+  </head>
+  <body data-call="idle">
+    <header class="nav">
+      <a class="wordmark" href="/">Wise Voice Agent <span>for Sei</span></a>
+      <nav>
+        <a href="#how">How it works</a>
+        <a href="#scope">Scope</a>
+        <a href="#design">Design</a>
+        <a href="https://github.com/soumyadeep-git/sei-AI">GitHub</a>
+      </nav>
+    </header>
+
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Voice agent · Wise customer support</p>
+        <h1>Answers “Where is my money?” Hands off everything else.</h1>
+        <p class="lede">
+          A phone support agent grounded in Wise's six “Where is my money?” articles. Anything
+          outside them goes to a human, with no partial answers.
+        </p>
+        <dl class="stats">
+          <div><dt>6</dt><dd>help articles, the only source of truth</dd></div>
+          <div><dt>2</dt><dd>tools: transfer to a human, end the call</dd></div>
+          <div><dt>$0</dt><dd>to run, every service on a free tier</dd></div>
+        </dl>
+      </div>
+
+      <div class="phone" aria-live="polite">
+        <div class="phone-head">
+          <span class="dot"></span>
+          <span id="status">Ready</span>
+          <span id="timer" class="mono"></span>
+        </div>
+        <div class="orb" aria-hidden="true"><span></span></div>
+        <ol id="transcript" class="transcript"></ol>
+        <p class="hint">
+          Try: “How do I check my transfer?”, “It says complete but the money isn't there”, or
+          “What's your exchange rate?”
+        </p>
+        <button id="call" type="button">Talk to the agent</button>
+        <p class="fine">
+          Uses your microphone. One caller at a time, three minutes per session. US callers can
+          also dial <a href="tel:+14245411576">+1 (424) 541-1576</a>.
+        </p>
+      </div>
+    </section>
+
+    <section id="how" class="band">
+      <p class="eyebrow">How a call works</p>
+      <h2>One pipeline, one model pass per turn.</h2>
+      <ol class="timeline">
+        <li>
+          <span class="mono">01</span>
+          <h3>The caller speaks</h3>
+          <p>Twilio streams the call audio. Silero detects the turn, Deepgram Nova transcribes it.</p>
+        </li>
+        <li>
+          <span class="mono">02</span>
+          <h3>The model decides</h3>
+          <p>
+            Groq's gpt-oss-120b answers from the six articles in its prompt, or calls a tool when
+            they don't cover the question.
+          </p>
+        </li>
+        <li>
+          <span class="mono">03</span>
+          <h3>The agent replies</h3>
+          <p>Deepgram Aura-2 speaks one to three short sentences. The caller can talk over it.</p>
+        </li>
+        <li>
+          <span class="mono">04</span>
+          <h3>The call ends cleanly</h3>
+          <p>
+            A handoff, a goodbye or a long silence plays a fixed closing line in full, then hangs
+            up.
+          </p>
+        </li>
+      </ol>
+    </section>
+
+    <section id="scope" class="scope">
+      <div>
+        <p class="eyebrow">Answers</p>
+        <h2>The six articles</h2>
+        <ol class="numbered">
+          <li>Checking the status of a transfer</li>
+          <li>When the money will arrive</li>
+          <li>Why it says complete before the money arrives</li>
+          <li>Why it's taking longer than the estimate</li>
+          <li>What a proof of payment is</li>
+          <li>What a banking partner reference number is</li>
+        </ol>
+      </div>
+      <div>
+        <p class="eyebrow">Hands to a human</p>
+        <h2>Everything else</h2>
+        <ol class="numbered handoff">
+          <li>Fees, exchange rates, cards, accounts and sign-up</li>
+          <li>Anything that needs the caller's own account</li>
+          <li>Questions unrelated to Wise</li>
+          <li>Requests to ignore the rules or change role</li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="design" class="band dark">
+      <p class="eyebrow">Design decisions</p>
+      <h2>Small on purpose.</h2>
+      <div class="cards">
+        <article>
+          <span class="mono">01</span>
+          <h3>Knowledge in the prompt, not RAG</h3>
+          <p>
+            The articles are about 2k tokens. Retrieval would add latency and a way to miss the
+            right chunk.
+          </p>
+        </article>
+        <article>
+          <span class="mono">02</span>
+          <h3>Deflection is a tool call</h3>
+          <p>
+            The same model pass that answers also decides scope, with the whole conversation in
+            view. No extra classifier round trip.
+          </p>
+        </article>
+        <article>
+          <span class="mono">03</span>
+          <h3>Fixed closing lines</h3>
+          <p>
+            Endings are scripted and can't be interrupted, so the agent never promises what a
+            human then has to honour.
+          </p>
+        </article>
+        <article>
+          <span class="mono">04</span>
+          <h3>Only Twilio can start a call</h3>
+          <p>
+            Media streams must carry Twilio's signature. The browser demo is capped and serves one
+            caller at a time.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section class="stack">
+      <p class="eyebrow">Runs on</p>
+      <ul>
+        <li>Pipecat</li>
+        <li>Twilio</li>
+        <li>Deepgram</li>
+        <li>Groq</li>
+        <li>Render</li>
+      </ul>
+    </section>
+
+    <footer>
+      <p>Built by Soumyadeep Dhali as a take-home for Sei AI. Not affiliated with Wise.</p>
+      <a href="https://github.com/soumyadeep-git/sei-AI">Source on GitHub</a>
+    </footer>
+  </body>
+</html>

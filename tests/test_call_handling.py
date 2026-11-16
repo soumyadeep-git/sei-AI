@@ -14,6 +14,7 @@ from pipecat.frames.frames import EndFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.runner.types import WebSocketRunnerArguments
 from pipecat.workers.runner import WorkerRunner
 
 import bot
@@ -61,6 +62,18 @@ def _signature(token: str, url: str) -> str:
 def test_only_twilio_signed_media_streams_are_accepted(header, accepted):
     websocket = MagicMock(headers={"x-twilio-signature": header} if header else {})
     assert bot.signed_by_twilio(websocket, "agent.example", "secret") is accepted
+
+
+def test_a_second_browser_session_is_turned_away():
+    websocket = MagicMock(close=AsyncMock())
+    args = WebSocketRunnerArguments(websocket=websocket, transport_type="websocket")
+
+    async def run():
+        async with bot.browser_line:
+            await bot.bot(args)
+
+    asyncio.run(run())
+    websocket.close.assert_awaited_once_with(code=4003)
 
 
 def test_closing_line_is_spoken_before_the_pipeline_ends():

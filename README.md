@@ -4,8 +4,12 @@ A phone support agent that answers inbound calls about Wise's
 ["Where is my money?"](https://wise.com/help/topics/5bVKT0uQdBrDp6T62keyfz/sending-money)
 FAQs and hands everything else to a human (here: a handoff line, then hang up).
 
+Live: [wise-voice-agent.onrender.com](https://wise-voice-agent.onrender.com), with a landing page
+and an in-browser demo call.
+
 ```
 caller ── PSTN ── Twilio ──(media stream, websocket)── bot.py
+browser ─────────────(/ws-client, websocket)──────────┘
                                                          │
           Silero VAD → Deepgram STT → Groq LLM → Deepgram TTS
                                          │
@@ -24,6 +28,7 @@ Built on [Pipecat](https://github.com/pipecat-ai/pipecat). Every service runs on
 ```
 bot.py                          prompt, tools and pipeline (the whole agent)
 knowledge/where_is_my_money.md  the six Wise articles, the agent's only source of truth
+web/                            landing page and browser demo (static, no build step)
 evals/                          behavioural scenarios + judge LLM
 tests/                          deterministic tests for call handling
 ```
@@ -59,12 +64,17 @@ line doesn't hold a session or burn quota.
 thing that costs API quota, so the bot checks Twilio's `X-Twilio-Signature`
 on the handshake and closes any connection without a valid one.
 
+**The browser demo is rationed.** The landing page talks to the same pipeline
+over a websocket, since Render's free tier can't carry WebRTC. Anyone with the
+link can use it, so it takes one caller at a time and ends each session after
+three minutes with a fixed closing line.
+
 ## Run locally
 
 ```bash
 uv sync
 cp .env.example .env    # add DEEPGRAM_API_KEY and GROQ_API_KEY
-uv run bot.py           # talk to it in the browser at http://localhost:7860
+uv run bot.py           # landing page and demo at http://localhost:7860, Pipecat's WebRTC client at /client/
 ```
 
 ## Quality checks
@@ -72,7 +82,7 @@ uv run bot.py           # talk to it in the browser at http://localhost:7860
 ```bash
 uv run ruff check . && uv run ruff format --check .
 uv run pyright
-uv run pytest           # signature check, silence handling, how calls end
+uv run pytest           # signature check, browser rationing, silence handling, how calls end
 ```
 
 Behaviour is tested with Pipecat's eval harness. Scripted text scenarios run

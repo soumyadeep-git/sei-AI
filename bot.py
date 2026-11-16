@@ -9,6 +9,7 @@ is deflected to a human (for this exercise: a fixed handoff line, then hang up).
     uv run bot.py -t twilio -x <public-hostname>    # production: Twilio webhook + media stream
 """
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -36,6 +37,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport
+from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.services.groq.llm import GroqLLMService
@@ -48,8 +50,14 @@ load_dotenv()
 
 REQUIRED_ENV = ("DEEPGRAM_API_KEY", "GROQ_API_KEY")
 SILENCE_TIMEOUT_S = 10
+BROWSER_SESSION_LIMIT_S = 180
 
-KNOWLEDGE = (Path(__file__).parent / "knowledge" / "where_is_my_money.md").read_text()
+ROOT = Path(__file__).parent
+KNOWLEDGE = (ROOT / "knowledge" / "where_is_my_money.md").read_text()
+WEB = ROOT / "web"
+
+# The public browser demo spends API quota, so it serves one caller at a time.
+browser_line = asyncio.Lock()
 
 GREETING = (
     "Hi, thanks for calling Wise. I can help with questions about where your money is, "
@@ -61,6 +69,7 @@ DEFLECTION = (
 )
 STILL_THERE = "Are you still there? Ask me anything about where your money is."
 GOODBYE = "Thanks for calling Wise. Goodbye!"
+TIME_UP = "We've reached the time limit for this demo. Thanks for calling Wise. Goodbye!"
 
 SYSTEM_PROMPT = f"""\
 You are the Wise phone support agent for one topic: "Where is my money?", meaning \
@@ -144,27 +153,44 @@ async def end_call(params: FunctionCallParams) -> None:
 
 async def bot(runner_args: RunnerArguments) -> None:
     """Entry point the Pipecat runner calls once per call/session."""
-    cli = runner_args.cli_args
-    if (
-        cli
-        and cli.transport == "twilio"
-        and isinstance(runner_args, WebSocketRunnerArguments)
-        and not signed_by_twilio(
-            runner_args.websocket, cli.proxy, os.getenv("TWILIO_AUTH_TOKEN", "")
-        )
-    ):
-        logger.warning("Rejected a media stream without a valid Twilio signature")
-        await runner_args.websocket.close(code=4003)
-        return
+    if isinstance(runner_args, WebSocketRunnerArguments):
+        websocket = runner_args.websocket
+        if runner_args.transport_type == "websocket":
+            if browser_line.locked():
+                logger.info("Rejected a browser session while another is active")
+                await websocket.close(code=4003)
+                return
+            async with browser_line:
+                await run_call(runner_args)
+            return
 
+        cli = runner_args.cli_args
+        token = os.getenv("TWILIO_AUTH_TOKEN", "")
+        if cli and cli.transport == "twilio" and not signed_by_twilio(websocket, cli.proxy, token):
+            logger.warning("Rejected a media stream without a valid Twilio signature")
+            await websocket.close(code=4003)
+            return
+
+    await run_call(runner_args)
+
+
+async def run_call(runner_args: RunnerArguments) -> None:
+    """Run one conversation until the caller or the bot ends it."""
     transport = await create_transport(
         runner_args,
         {
             "twilio": lambda: FastAPIWebsocketParams(audio_in_enabled=True, audio_out_enabled=True),
+            "websocket": lambda: FastAPIWebsocketParams(
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+                serializer=ProtobufFrameSerializer(),
+                session_timeout=BROWSER_SESSION_LIMIT_S,
+            ),
             "webrtc": lambda: TransportParams(audio_in_enabled=True, audio_out_enabled=True),
             "eval": lambda: EvalTransportParams(audio_in_enabled=True, audio_out_enabled=True),
         },
     )
+    kind = getattr(runner_args, "transport_type", None)
 
     stt = DeepgramSTTService(api_key=os.environ["DEEPGRAM_API_KEY"])
     tts = DeepgramTTSService(
@@ -202,11 +228,13 @@ async def bot(runner_args: RunnerArguments) -> None:
             assistant_aggregator,
         ]
     )
+    # Twilio media streams are 8 kHz mu-law; the browser client records at 16 kHz, plays 24 kHz.
+    rate_in, rate_out = (8000, 8000) if kind == "twilio" else (16000, 24000)
     worker = PipelineWorker(
         pipeline,
         params=PipelineParams(
-            audio_in_sample_rate=8000,  # Twilio media streams are 8 kHz mu-law
-            audio_out_sample_rate=8000,
+            audio_in_sample_rate=rate_in,
+            audio_out_sample_rate=rate_out,
             enable_metrics=True,
         ),
     )
@@ -220,6 +248,13 @@ async def bot(runner_args: RunnerArguments) -> None:
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         await runner.cancel()
+
+    if kind == "websocket":
+
+        @transport.event_handler("on_session_timeout")
+        async def on_session_timeout(transport, client):
+            logger.info("Browser session hit its time limit, ending call")
+            await worker.queue_frames(closing_frames(TIME_UP))
 
     # One nudge, then hang up, so an open line can't hold the session and quotas.
     strikes = heard = 0
@@ -241,6 +276,13 @@ if __name__ == "__main__":
     if missing := [name for name in REQUIRED_ENV if not os.getenv(name)]:
         sys.exit(f"Missing environment variables: {', '.join(missing)} (see .env.example)")
 
-    from pipecat.runner.run import main
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+    from pipecat.runner.run import app, main
 
+    @app.get("/", include_in_schema=False)
+    def landing_page() -> FileResponse:
+        return FileResponse(WEB / "index.html")
+
+    app.mount("/web", StaticFiles(directory=WEB), name="web")
     main()
