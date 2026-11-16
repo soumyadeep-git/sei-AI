@@ -286,6 +286,49 @@ h3 {
   cursor: wait;
 }
 
+.call-me {
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--sand-dark);
+}
+
+.call-me label {
+  font: 500 0.7rem var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.call-me div {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.call-me input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.7rem 1rem;
+  border: 1px solid var(--sand-dark);
+  border-radius: 999px;
+  background: var(--sand);
+  font: 400 0.95rem var(--sans);
+}
+
+.call-me button {
+  padding: 0.7rem 1.25rem;
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  background: transparent;
+  font: 500 0.95rem var(--sans);
+  cursor: pointer;
+}
+
+.call-me button:hover {
+  background: var(--ink);
+  color: var(--ivory);
+}
+
 .band,
 .scope,
 .stack {

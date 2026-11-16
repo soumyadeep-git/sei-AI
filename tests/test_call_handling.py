@@ -8,8 +8,12 @@ import base64
 import hashlib
 import hmac
 from unittest.mock import AsyncMock, MagicMock
+from urllib.parse import parse_qsl
 
+import httpx
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pipecat.frames.frames import EndFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker
@@ -74,6 +78,74 @@ def test_a_second_browser_session_is_turned_away():
 
     asyncio.run(run())
     websocket.close.assert_awaited_once_with(code=4003)
+
+
+@pytest.fixture
+def web(monkeypatch):
+    """The web routes, with Twilio replaced by a recorder of the calls it was asked to place."""
+    for name, value in {
+        "PUBLIC_HOST": "agent.example",
+        "TWILIO_ACCOUNT_SID": "AC123",
+        "TWILIO_AUTH_TOKEN": "secret",
+        "TWILIO_PHONE_NUMBER": "+14245411576",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    placed = []
+
+    def twilio(request: httpx.Request) -> httpx.Response:
+        placed.append(dict(parse_qsl(request.content.decode())))
+        if placed[-1]["To"] == "+15550000000":
+            return httpx.Response(400, json={"message": "The number is unverified."})
+        return httpx.Response(201, json={"status": "queued"})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        bot.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(twilio), **kwargs),
+    )
+    app = FastAPI()
+    bot.add_web_routes(app)
+    return TestClient(app), placed
+
+
+def test_the_agent_calls_a_visitor_back(web):
+    client, placed = web
+
+    response = client.post("/call", json={"to": "+44 20 7946 0958"})
+
+    assert response.status_code == 200
+    assert placed == [
+        {"To": "+442079460958", "From": "+14245411576", "Url": "https://agent.example/"}
+    ]
+
+
+def test_call_backs_are_rate_limited(web):
+    client, placed = web
+
+    client.post("/call", json={"to": "+442079460958"})
+    response = client.post("/call", json={"to": "+442079460958"})
+
+    assert response.status_code == 429
+    assert len(placed) == 1
+
+
+@pytest.mark.parametrize("number", ["020 7946 0958", "+0123", "call me"])
+def test_call_backs_need_a_full_international_number(web, number):
+    client, placed = web
+
+    assert client.post("/call", json={"to": number}).status_code == 400
+    assert placed == []
+
+
+def test_twilio_refusals_reach_the_visitor(web):
+    client, _ = web
+
+    response = client.post("/call", json={"to": "+15550000000"})
+
+    assert response.status_code == 400
+    assert response.json()["message"] == "The number is unverified."
 
 
 def test_closing_line_is_spoken_before_the_pipeline_ends():

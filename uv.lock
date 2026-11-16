@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -4546,6 +4546,7 @@ name = "wise-voice-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "httpx" },
     { name = "pipecat-ai", extra = ["deepgram", "groq", "runner", "websocket"] },
 ]
 
@@ -4558,7 +4559,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pipecat-ai", extras = ["deepgram", "groq", "runner", "silero", "websocket"], specifier = "==1.15.0" }]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pipecat-ai", extras = ["deepgram", "groq", "runner", "silero", "websocket"], specifier = "==1.15.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [

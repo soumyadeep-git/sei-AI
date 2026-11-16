@@ -5,6 +5,7 @@ description = "Phone support agent for Wise's \"Where is my money?\" FAQs, built
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "httpx>=0.28.1",
     "pipecat-ai[deepgram,groq,runner,silero,websocket]==1.15.0",
 ]
 

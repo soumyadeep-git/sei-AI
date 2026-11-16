@@ -88,3 +88,26 @@ async function start() {
 }
 
 button.addEventListener("click", () => (client ? client.disconnect() : start()));
+
+const callMe = document.querySelector("#call-me");
+const callMeStatus = document.querySelector("#call-me-status");
+
+callMe.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = callMe.querySelector("button");
+  submit.disabled = true;
+  callMeStatus.textContent = "Placing the call…";
+  try {
+    const response = await fetch("/call", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: callMe.phone.value }),
+    });
+    const { message } = await response.json();
+    callMeStatus.textContent = message ?? "Something went wrong. Try again.";
+  } catch {
+    callMeStatus.textContent = "Couldn't reach the server. Try again.";
+  } finally {
+    submit.disabled = false;
+  }
+});

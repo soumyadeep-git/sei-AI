@@ -13,12 +13,18 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import math
 import os
+import re
 import sys
+import time
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
-from fastapi import WebSocket
+from fastapi import FastAPI, WebSocket
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.evals.transport import EvalTransportParams
@@ -45,12 +51,15 @@ from pipecat.services.llm_service import FunctionCallParams
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.workers.runner import WorkerRunner
+from pydantic import BaseModel
 
 load_dotenv()
 
 REQUIRED_ENV = ("DEEPGRAM_API_KEY", "GROQ_API_KEY")
 SILENCE_TIMEOUT_S = 10
 BROWSER_SESSION_LIMIT_S = 180
+CALL_COOLDOWN_S = 60
+PHONE_NUMBER = re.compile(r"\+[1-9]\d{7,14}")
 
 ROOT = Path(__file__).parent
 KNOWLEDGE = (ROOT / "knowledge" / "where_is_my_money.md").read_text()
@@ -272,17 +281,54 @@ async def run_call(runner_args: RunnerArguments) -> None:
     await runner.run()
 
 
-if __name__ == "__main__":
-    if missing := [name for name in REQUIRED_ENV if not os.getenv(name)]:
-        sys.exit(f"Missing environment variables: {', '.join(missing)} (see .env.example)")
+class CallRequest(BaseModel):
+    to: str
 
-    from fastapi.responses import FileResponse
-    from fastapi.staticfiles import StaticFiles
-    from pipecat.runner.run import app, main
+
+def add_web_routes(app: FastAPI) -> None:
+    """Serve the landing page, and let visitors have the agent ring their phone."""
+    last_call_at = -math.inf
 
     @app.get("/", include_in_schema=False)
     def landing_page() -> FileResponse:
         return FileResponse(WEB / "index.html")
 
+    @app.post("/call")
+    async def call_me(request: CallRequest) -> JSONResponse:
+        nonlocal last_call_at
+        host = os.getenv("PUBLIC_HOST") or os.getenv("RENDER_EXTERNAL_HOSTNAME")
+        sid, token = os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")
+        caller_id = os.getenv("TWILIO_PHONE_NUMBER")
+        if not (host and sid and token and caller_id):
+            return JSONResponse({"message": "Phone calls aren't set up on this server."}, 503)
+
+        to = re.sub(r"[\s().-]", "", request.to)
+        if not PHONE_NUMBER.fullmatch(to):
+            return JSONResponse({"message": "Enter the number with its country code."}, 400)
+        if time.monotonic() - last_call_at < CALL_COOLDOWN_S:
+            return JSONResponse({"message": "A call was just placed. Try again in a minute."}, 429)
+        last_call_at = time.monotonic()
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Calls.json",
+                auth=(sid, token),
+                data={"To": to, "From": caller_id, "Url": f"https://{host}/"},
+            )
+        if response.is_error:
+            message = response.json().get("message", "Twilio couldn't place the call.")
+            return JSONResponse({"message": message}, 400)
+        logger.info("Placed an outbound call")
+        return JSONResponse({"message": "Calling you now. Answer, then press any key."})
+
     app.mount("/web", StaticFiles(directory=WEB), name="web")
+
+
+if __name__ == "__main__":
+    if missing := [name for name in REQUIRED_ENV if not os.getenv(name)]:
+        sys.exit(f"Missing environment variables: {', '.join(missing)} (see .env.example)")
+
+    from pipecat.runner.run import app, main
+
+    add_web_routes(app)
     main()

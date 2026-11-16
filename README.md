@@ -67,7 +67,9 @@ on the handshake and closes any connection without a valid one.
 **The browser demo is rationed.** The landing page talks to the same pipeline
 over a websocket, since Render's free tier can't carry WebRTC. Anyone with the
 link can use it, so it takes one caller at a time and ends each session after
-three minutes with a fixed closing line.
+three minutes with a fixed closing line. The page's "Call me" form has
+Twilio ring the visitor's phone instead, at most once a minute. On a trial
+account Twilio only rings verified numbers.
 
 ## Run locally
 
@@ -108,7 +110,7 @@ secrets.
 ## Deploy
 
 1. Push the repo to GitHub, then in Render choose **New → Blueprint** and
-   select it. `render.yaml` sets up a free Docker web service. Fill in the four
+   select it. `render.yaml` sets up a free Docker web service. Fill in the five
    secrets when prompted.
 2. In the Twilio console, open your number → **Voice configuration** →
    "A call comes in": **Webhook**, `https://<service>.onrender.com/`, **HTTP POST**.
