@@ -12,6 +12,16 @@ judge:
     allow_continue: false
 
 scenarios:
+  - name: where_is_my_money
+    turns:
+      - user: "Where is my money?"
+        expect:
+          - event: response
+            eval: "explains how to check the transfer in the Wise tracker, and does not ask for a transfer number, reference number, amount or other personal details"
+          - event: function_call
+            absent: true
+            within_ms: 8000
+
   - name: check_status
     turns:
       - user: "How do I check the status of my transfer?"
@@ -67,7 +77,7 @@ scenarios:
       - user: "What's a banking partner reference number?"
         expect:
           - event: response
-            eval: "explains it's a number to give the recipient so their bank can locate the payment"
+            eval: "explains it's a number the recipient or their bank can use to locate the payment"
           - event: function_call
             absent: true
             within_ms: 8000
