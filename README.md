@@ -1,135 +1,110 @@
 # Wise "Where is my money?" voice agent
 
-A phone support agent that answers inbound calls about Wise's
+A phone support agent for Wise. It answers questions from the six
 ["Where is my money?"](https://wise.com/help/topics/5bVKT0uQdBrDp6T62keyfz/sending-money)
-FAQs and hands everything else to a human (here: a handoff line, then hang up).
+help articles and hands everything else to a human, which here means a short
+handoff line and then hanging up.
 
-Live: [wise-voice-agent.onrender.com](https://wise-voice-agent.onrender.com), with a landing page
-and an in-browser demo call.
+Try it at [wise-voice-agent.onrender.com](https://wise-voice-agent.onrender.com)
+in the browser, or call +1 (424) 541-1576 from the US. The page can also have
+the agent call your phone.
 
-```
-caller ── PSTN ── Twilio ──(media stream, websocket)── bot.py
-browser ─────────────(/ws-client, websocket)──────────┘
-                                                         │
-          Silero VAD → Deepgram STT → Groq LLM → Deepgram TTS
-                                         │
-                       tools: transfer_to_human, end_call
-```
-
-Built on [Pipecat](https://github.com/pipecat-ai/pipecat). Every service runs on a free tier.
-
-| Concern   | Choice                          | Why |
-|-----------|---------------------------------|-----|
-| Telephony | Twilio (trial)                  | Free number; Pipecat ships a Twilio serializer |
-| STT / TTS | Deepgram Nova / Aura-2          | Low-latency streaming, one free account for both |
-| LLM       | Groq, `openai/gpt-oss-120b`     | Fast first token, reliable tool calling, free tier |
-| Hosting   | Render (Docker, free)           | Public HTTPS/WSS endpoint for Twilio |
+## How it works
 
 ```
-bot.py                          prompt, tools and pipeline (the whole agent)
-knowledge/where_is_my_money.md  the six Wise articles, the agent's only source of truth
-web/                            landing page and browser demo (static, no build step)
-evals/                          behavioural scenarios + judge LLM
-tests/                          deterministic tests for call handling
+caller -> Twilio -> media stream websocket -> bot.py
+browser -> /ws-client websocket ------------> bot.py
+
+bot.py: Silero VAD -> Deepgram STT -> Groq LLM -> Deepgram TTS
+        tools: transfer_to_human, end_call
 ```
 
-## Design
+Built on [Pipecat](https://github.com/pipecat-ai/pipecat). Speech is Deepgram
+(Nova-3 in, Aura-2 out), the LLM is `openai/gpt-oss-120b` on Groq, telephony is
+a Twilio trial number and it's hosted on Render. Everything runs on free tiers.
 
-**Grounding: the whole knowledge base goes in the prompt, not RAG.** The six
-articles are ~2k tokens. At that size, retrieval only adds latency and a way
-to miss the right chunk. The prompt tells the model to answer only from that
-text. Retrieval is the next step once the corpus outgrows the context budget.
+```
+bot.py                          prompt, tools and pipeline
+knowledge/where_is_my_money.md  the six articles, the only source of truth
+web/                            landing page and browser demo
+evals/                          scenario evals with an LLM judge
+tests/                          unit tests for call handling
+```
 
-**Deflection is a tool call in the same LLM pass.** A separate intent
-classifier would add a model round trip to every turn. Instead the model
-decides in-scope vs out-of-scope with the full conversation in view, and
-calls `transfer_to_human` when the knowledge base doesn't answer. The default
-is to deflect: no partial answers. That covers other Wise topics, anything
-needing the caller's account, unrelated questions, and attempts to change the
-bot's role.
+## Design choices
 
-**Every call ends the same way.** Deflection, goodbye and silence all go
-through `closing_frames`: a fixed line, marked uninterruptible so barge-in
-can't cut it off, followed by an end frame. The pipeline flushes the speech
-before shutting down, then the Twilio serializer hangs up through the REST
-API. The lines are fixed text, so the bot can't promise anything a human
-then has to honour. In production, `transfer_to_human` would redirect the call
-to a `<Dial>` queue instead of hanging up.
+The six articles are about 2k tokens, so they go straight into the system
+prompt. Retrieval would add latency and a chance of missing the right chunk
+without any benefit at this size.
 
-**Silence is handled.** After 10 seconds of silence the bot checks once
-whether the caller is still there. A second silence ends the call, so an open
-line doesn't hold a session or burn quota.
+Deciding what's in scope happens in the same LLM call that answers, through the
+`transfer_to_human` tool. A separate classifier would add a round trip to every
+turn. When the articles don't cover a question the bot hands off rather than
+giving a partial answer. That includes other Wise topics, anything that needs
+the caller's account, off-topic questions and prompt injection.
 
-**Only Twilio can start a call.** The media stream websocket is the only
-thing that costs API quota, so the bot checks Twilio's `X-Twilio-Signature`
-on the handshake and closes any connection without a valid one.
+Handoff, goodbye and silence all end the call the same way: a fixed closing
+line that can't be interrupted, then an end frame, after which Twilio hangs up.
+Fixed lines mean the bot can't promise something a human then has to honour.
+In production `transfer_to_human` would `<Dial>` a support queue instead.
 
-**The browser demo is rationed.** The landing page talks to the same pipeline
-over a websocket, since Render's free tier can't carry WebRTC. Anyone with the
-link can use it, so it takes one caller at a time and ends each session after
-three minutes with a fixed closing line. The page's "Call me" form has
-Twilio ring the visitor's phone instead, at most once a minute. On a trial
-account Twilio only rings verified numbers.
+After 10 seconds of silence the bot asks if the caller is still there. A second
+silence ends the call.
+
+The media stream handshake must carry a valid `X-Twilio-Signature`, so only
+Twilio can open a phone session. The browser demo takes one caller at a time
+for up to three minutes, and the "Call me" form allows one call a minute.
 
 ## Run locally
 
 ```bash
 uv sync
 cp .env.example .env    # add DEEPGRAM_API_KEY and GROQ_API_KEY
-uv run bot.py           # landing page and demo at http://localhost:7860, Pipecat's WebRTC client at /client/
+uv run bot.py           # http://localhost:7860
 ```
 
-## Quality checks
+## Tests and evals
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
 uv run pyright
-uv run pytest           # signature check, browser rationing, silence handling, how calls end
+uv run pytest
 ```
 
-Behaviour is tested with Pipecat's eval harness. Scripted text scenarios run
-headless against the live bot:
+The evals use Pipecat's eval harness against a running bot:
 
 ```bash
-uv run bot.py                                  # terminal 1
-PYTHONPATH=. uv run pipecat eval run evals/ -v # terminal 2
+uv run bot.py
+PYTHONPATH=. uv run pipecat eval run evals/ -v
 ```
 
-`in_scope.yaml` has one question per article, which the bot must answer
-without deflecting, plus a multi-turn call that ends with `end_call`.
-`out_of_scope.yaml` covers fees, exchange rates, cards, account actions,
-off-topic requests and prompt injection, which must all go to
-`transfer_to_human`. Tool calls are checked deterministically. Answer content
-is checked by a judge LLM on Groq (`qwen/qwen3.8-27b`), a different model
-family from the bot so the bot doesn't grade its own answers.
+`in_scope.yaml` asks one question per article and must get an answer, not a
+handoff. It also checks that a call ends with `end_call` when the caller says
+goodbye. `out_of_scope.yaml` covers fees, exchange rates, cards, account
+actions, off-topic requests and prompt injection, all of which must go to
+`transfer_to_human`. Answers are graded by `qwen/qwen3.8-27b` on Groq, a
+different model family from the bot.
 
-CI (`.github/workflows/ci.yml`) runs lint, type checks and tests on every push.
-The evals use live APIs, so they run on manual dispatch, using repository
-secrets.
+CI runs lint, type checks and unit tests on every push. The evals call live
+APIs, so they run on manual dispatch.
 
 ## Deploy
 
-1. Push the repo to GitHub, then in Render choose **New → Blueprint** and
-   select it. `render.yaml` sets up a free Docker web service. Fill in the five
-   secrets when prompted.
-2. In the Twilio console, open your number → **Voice configuration** →
-   "A call comes in": **Webhook**, `https://<service>.onrender.com/`, **HTTP POST**.
-3. Call the number. (Trial accounts play a short Twilio notice first; press
-   any key.)
-
-To run anywhere else: `docker build -t wise-agent . && docker run -p 7860:7860
---env-file .env -e PUBLIC_HOST=<public-hostname> wise-agent`. For local
-telephony testing, `ngrok http 7860` gives you a hostname.
+1. In Render, create a Blueprint from this repo. `render.yaml` sets up a free
+   Docker service and asks for the five secrets.
+2. In the Twilio console, set the number's incoming call webhook to
+   `https://<service>.onrender.com/` (HTTP POST).
+3. Call the number. Trial accounts play a short notice first, then ask you to
+   press a key.
 
 ## Known limitations
 
-- **Cold starts.** Render's free tier sleeps after 15 idle minutes and takes
-  about a minute to wake. Twilio stops waiting for the webhook after 15
-  seconds, so the first call after a quiet spell can fail. Open `/status`
-  before a demo, or keep the service awake with a free uptime pinger.
-- **Caller transcripts in logs.** Pipecat's runner logs at debug level, which
-  includes what the caller says. Production would need log redaction or a
-  higher log level.
-- **Trial telephony.** A Twilio trial number only takes domestic calls, and
-  Twilio caps trial calls at 10 minutes.
-- English only, and a single knowledge source.
+- Render's free tier sleeps after 15 idle minutes and takes about a minute to
+  wake, longer than Twilio waits for the webhook. Open `/status` before a demo.
+- A Twilio trial number only takes domestic calls and can only call verified
+  numbers.
+- Pipecat logs at debug level, which includes caller transcripts. Production
+  would need redaction.
+- Turn-taking isn't perfect. A pause mid-sentence can make the bot reply early,
+  and a late transcript occasionally makes it answer twice.
+- English only.
