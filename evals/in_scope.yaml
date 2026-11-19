@@ -17,7 +17,7 @@ scenarios:
       - user: "Where is my money?"
         expect:
           - event: response
-            eval: "explains how to check the transfer in the Wise tracker, and does not ask for a transfer number, reference number, amount or other personal details"
+            eval: "explains how to check the transfer in the Wise tracker in at most two short sentences, and does not ask for a transfer number, reference number, amount or other personal details"
           - event: function_call
             absent: true
             within_ms: 8000
@@ -37,7 +37,7 @@ scenarios:
       - user: "The app says my money is due to arrive today but it's not there yet."
         expect:
           - event: response
-            eval: "explains it should have arrived or that some banks need a few hours to process it"
+            eval: "explains Wise has sent it and the recipient's bank may still be processing it, or that some banks need a few hours"
           - event: function_call
             absent: true
             within_ms: 8000
